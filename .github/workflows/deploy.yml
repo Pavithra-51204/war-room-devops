@@ -20,26 +20,27 @@ jobs:
         curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.deb.sh' | sudo -E bash
         sudo apt-get install infisical -y
 
-    # 3. Fetch and Load Secrets into Environment
+    # 3. Fetch Secrets & Load into GITHUB_ENV
     - name: Fetch Secrets
       env:
         INFISICAL_TOKEN: ${{ secrets.INFISICAL_TOKEN }}
       run: |
-        # Export secrets to a temp file
-        infisical export --env=dev --format=dotenv > .env
+        # --raw ensures no quotes like "password" are added
+        infisical export --env=dev --format=dotenv --raw > .env
         
-        # This part is key: It reads the file and tells GitHub 
-        # "These are my environment variables now"
+        # This securely maps every line in .env to the GitHub Action Environment
         cat .env >> $GITHUB_ENV
 
     # 4. Login to Docker Hub
     - name: Docker Login
       run: |
+        # Using --password-stdin is the most secure way to pass the token
         echo "${{ env.DOCKER_PASSWORD }}" | docker login -u "${{ env.DOCKER_USERNAME }}" --password-stdin
 
     # 5. Build & Push Docker Image
     - name: Build and Push
       run: |
+        # We use the variable fetched from Infisical
         docker build -t ${{ env.DOCKER_USERNAME }}/war-room-backend ./server
         docker push ${{ env.DOCKER_USERNAME }}/war-room-backend
 
@@ -51,9 +52,12 @@ jobs:
         username: ${{ env.EC2_USER }}
         key: ${{ env.EC2_SSH_KEY }}
         script: |
-          # We log in to Docker Hub on the EC2 as well to pull the private image
+          # Log in on EC2 so it has permission to pull the image
           echo "${{ env.DOCKER_PASSWORD }}" | docker login -u "${{ env.DOCKER_USERNAME }}" --password-stdin
+          
+          docker pull ${{ env.DOCKER_USERNAME }}/war-room-backend
           docker stop warroom || true
           docker rm warroom || true
-          docker pull ${{ env.DOCKER_USERNAME }}/war-room-backend
+          
+          # We assume the .env already exists on the EC2 in the correct folder
           docker run -d -p 4000:4000 --env-file .env --name warroom ${{ env.DOCKER_USERNAME }}/war-room-backend
