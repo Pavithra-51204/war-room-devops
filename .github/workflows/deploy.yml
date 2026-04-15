@@ -18,18 +18,25 @@ jobs:
         curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.deb.sh' | sudo -E bash
         sudo apt-get install infisical -y
 
+# 3. Fetch Secrets & Surgical Clean
     - name: Fetch Secrets
       env:
         INFISICAL_TOKEN: ${{ secrets.INFISICAL_TOKEN }}
       run: |
+        # Export secrets
         infisical export --env=dev --format=dotenv > .env
-        sed -i 's/"//g' .env
+        
+        # This removes all " and ' characters from the file so Docker gets the RAW string
+        sed -i 's/["'\'']//g' .env
+        
+        # Load into GitHub Environment
         cat .env >> $GITHUB_ENV
 
+    # 4. Login to Docker Hub (Simplified)
     - name: Docker Login
       run: |
-        echo "${{ env.DOCKER_PASSWORD }}" | docker login -u "${{ env.DOCKER_USERNAME }}" --password-stdin
-
+        # We remove the extra quotes here too to be 100% sure
+        echo ${{ env.DOCKER_PASSWORD }} | docker login -u ${{ env.DOCKER_USERNAME }} --password-stdin
     - name: Build and Push
       run: |
         docker build -t ${{ env.DOCKER_USERNAME }}/war-room-backend ./server
