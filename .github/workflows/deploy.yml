@@ -1,0 +1,58 @@
+name: CI/CD with Infisical
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+
+    # 1. Checkout code
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    # 2. Install Infisical CLI
+    - name: Install Infisical
+      run: |
+        curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.deb.sh' | sudo -E bash
+        sudo apt-get install infisical -y
+
+    # 3. Pull secrets from Infisical
+    - name: Fetch secrets
+      run: |
+        infisical export --env=dev --format=dotenv > .env
+      env:
+        INFISICAL_TOKEN: ${{ secrets.INFISICAL_TOKEN }}
+
+    # 4. Export env variables
+    - name: Load env
+      run: |
+        export $(grep -v '^#' .env | xargs)
+
+    # 5. Login to Docker Hub
+    - name: Docker Login
+      run: |
+        echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+
+    # 6. Build & Push Docker Image
+    - name: Build and Push
+      run: |
+        docker build -t $DOCKER_USERNAME/war-room-backend ./server
+        docker push $DOCKER_USERNAME/war-room-backend
+
+    # 7. Deploy to EC2
+    - name: SSH Deploy
+      uses: appleboy/ssh-action@v0.1.6
+      with:
+        host: ${{ env.EC2_HOST }}
+        username: ${{ env.EC2_USER }}
+        key: ${{ env.EC2_SSH_KEY }}
+        script: |
+          docker stop warroom || true
+          docker rm warroom || true
+          docker pull $DOCKER_USERNAME/war-room-backend
+          docker run -d -p 4000:4000 --env-file .env --name warroom $DOCKER_USERNAME/war-room-backend
