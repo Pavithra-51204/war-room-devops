@@ -1,58 +1,83 @@
-name: CI/CD with Infisical
+name: CI/CD — Corporate War Room
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v3
+      # ── 1. Checkout ────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Install Infisical
-      run: |
-        curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.deb.sh' | sudo -E bash
-        sudo apt-get install infisical -y
+      # ── 2. Install Infisical CLI ───────────────────────────────
+      - name: Install Infisical
+        run: |
+          curl -1sLf \
+            'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.deb.sh' \
+            | sudo -E bash
+          sudo apt-get install -y infisical
 
-# 3. Fetch Secrets & Surgical Clean
-    - name: Fetch Secrets
-      env:
-        INFISICAL_TOKEN: ${{ secrets.INFISICAL_TOKEN }}
-      run: |
-        # Export secrets
-        infisical export --env=dev --format=dotenv > .env
-        
-        # This removes all " and ' characters from the file so Docker gets the RAW string
-        sed -i 's/["'\'']//g' .env
-        
-        # Load into GitHub Environment
-        cat .env >> $GITHUB_ENV
+      # ── 3. Fetch secrets from Infisical ───────────────────────
+      #    Strips quotes so Docker receives raw strings.
+      #    Loads into $GITHUB_ENV for use in subsequent run: steps.
+      - name: Fetch Secrets from Infisical
+        env:
+          INFISICAL_TOKEN: ${{ secrets.INFISICAL_TOKEN }}
+        run: |
+          infisical export --env=dev --format=dotenv > .env
+          sed -i "s/[\"']//g" .env
+          cat .env >> $GITHUB_ENV
 
-    # 4. Login to Docker Hub (Simplified)
-    - name: Docker Login
-      run: |
-        # We remove the extra quotes here too to be 100% sure
-        echo ${{ env.DOCKER_PASSWORD }} | docker login -u ${{ env.DOCKER_USERNAME }} --password-stdin
-    - name: Build and Push
-      run: |
-        docker build -t ${{ env.DOCKER_USERNAME }}/war-room-backend ./server
-        docker push ${{ env.DOCKER_USERNAME }}/war-room-backend
+      # ── 4. Docker login + build + push ────────────────────────
+      - name: Docker Login
+        run: |
+          echo "${{ env.DOCKER_PASSWORD }}" \
+            | docker login -u "${{ env.DOCKER_USERNAME }}" --password-stdin
 
-# 6. Deploy to EC2
-    - name: SSH Deploy
-      uses: appleboy/ssh-action@v0.1.6
-      with:
-        host: ${{ env.EC2_HOST }}
-        username: ${{ env.EC2_USER }}
-        key: ${{ secrets.EC2_SSH_KEY }} # Uses the secret we just added to GitHub
-        script: |
-          # Use raw variables for the EC2 commands
-          echo "${{ env.DOCKER_PASSWORD }}" | docker login -u "${{ env.DOCKER_USERNAME }}" --password-stdin
-          docker pull ${{ env.DOCKER_USERNAME }}/war-room-backend
-          docker stop warroom || true
-          docker rm warroom || true
-          docker run -d -p 4000:4000 --env-file .env --name warroom ${{ env.DOCKER_USERNAME }}/war-room-backend
+      - name: Build and Push image
+        run: |
+          docker build -t ${{ env.DOCKER_USERNAME }}/war-room-backend ./server
+          docker push ${{ env.DOCKER_USERNAME }}/war-room-backend
+
+      # ── 5. SSH deploy to EC2 ──────────────────────────────────
+      # CRITICAL FIX: host and username come from secrets.*, NOT env.*
+      # with: blocks cannot read variables set via $GITHUB_ENV.
+      # EC2_HOST and EC2_USER must be GitHub Secrets, not Infisical vars.
+      - name: SSH Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.0   # use latest stable, not v0.1.6
+        with:
+          host:     ${{ secrets.EC2_HOST }}   # ← GitHub Secret, not env.EC2_HOST
+          username: ${{ secrets.EC2_USER }}   # ← GitHub Secret, not env.EC2_USER
+          key:      ${{ secrets.EC2_SSH_KEY }}
+          timeout:  120s
+          script: |
+            set -e
+
+            # Login to Docker Hub on EC2
+            echo "${{ env.DOCKER_PASSWORD }}" \
+              | docker login -u "${{ env.DOCKER_USERNAME }}" --password-stdin
+
+            # Pull the fresh image
+            docker pull ${{ env.DOCKER_USERNAME }}/war-room-backend
+
+            # Zero-downtime swap
+            docker stop warroom 2>/dev/null || true
+            docker rm   warroom 2>/dev/null || true
+
+            # Run with .env file already on the EC2
+            docker run -d \
+              --name warroom \
+              --restart unless-stopped \
+              -p 4000:4000 \
+              --env-file ~/corporate-warroom/server/.env \
+              ${{ env.DOCKER_USERNAME }}/war-room-backend
+
+            # Health check
+            sleep 6
+            curl -sf http://localhost:4000/health \
+              && echo "Deployment successful" \
+              || (echo "Health check failed" && docker logs warroom --tail 30 && exit 1)
