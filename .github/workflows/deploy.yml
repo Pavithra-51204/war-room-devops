@@ -43,15 +43,12 @@ jobs:
           docker build -t ${{ env.DOCKER_USERNAME }}/war-room-backend ./server
           docker push ${{ env.DOCKER_USERNAME }}/war-room-backend
 
-      # ── 5. SSH deploy to EC2 ──────────────────────────────────
-      # CRITICAL FIX: host and username come from secrets.*, NOT env.*
-      # with: blocks cannot read variables set via $GITHUB_ENV.
-      # EC2_HOST and EC2_USER must be GitHub Secrets, not Infisical vars.
+# ── 5. SSH deploy to EC2 ──────────────────────────────────
       - name: SSH Deploy to EC2
-        uses: appleboy/ssh-action@v1.0.0   # use latest stable, not v0.1.6
+        uses: appleboy/ssh-action@v1.0.0
         with:
-          host:     ${{ secrets.EC2_HOST }}   # ← GitHub Secret, not env.EC2_HOST
-          username: ${{ secrets.EC2_USER }}   # ← GitHub Secret, not env.EC2_USER
+          host:     ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
           key:      ${{ secrets.EC2_SSH_KEY }}
           timeout:  120s
           script: |
@@ -64,16 +61,16 @@ jobs:
             # Pull the fresh image
             docker pull ${{ env.DOCKER_USERNAME }}/war-room-backend
 
-            # Zero-downtime swap
+            # Clean up old container
             docker stop warroom 2>/dev/null || true
             docker rm   warroom 2>/dev/null || true
 
-            # Run with .env file already on the EC2
+            # 🔥 THE CRITICAL FIX: Use the path we found with 'find'
             docker run -d \
               --name warroom \
               --restart unless-stopped \
               -p 4000:4000 \
-              --env-file ~/corporate-warroom/server/.env \
+              --env-file /home/ubuntu/war-room-devops/server/.env \
               ${{ env.DOCKER_USERNAME }}/war-room-backend
 
             # Health check
