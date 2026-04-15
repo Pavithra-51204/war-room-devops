@@ -42,13 +42,15 @@ jobs:
         docker build -t ${{ env.DOCKER_USERNAME }}/war-room-backend ./server
         docker push ${{ env.DOCKER_USERNAME }}/war-room-backend
 
-    - name: Deploy to EC2
+# 6. Deploy to EC2
+    - name: SSH Deploy
       uses: appleboy/ssh-action@v0.1.6
       with:
         host: ${{ env.EC2_HOST }}
         username: ${{ env.EC2_USER }}
-        key: ${{ env.EC2_SSH_KEY }}
+        key: ${{ secrets.EC2_SSH_KEY }} # Uses the secret we just added to GitHub
         script: |
+          # Use raw variables for the EC2 commands
           echo "${{ env.DOCKER_PASSWORD }}" | docker login -u "${{ env.DOCKER_USERNAME }}" --password-stdin
           docker pull ${{ env.DOCKER_USERNAME }}/war-room-backend
           docker stop warroom || true
