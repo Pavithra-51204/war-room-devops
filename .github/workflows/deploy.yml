@@ -10,54 +10,40 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    # 1. Checkout code
     - name: Checkout
       uses: actions/checkout@v3
 
-    # 2. Install Infisical CLI
     - name: Install Infisical
       run: |
         curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.deb.sh' | sudo -E bash
         sudo apt-get install infisical -y
 
-    # 3. Fetch Secrets & Load into GITHUB_ENV
     - name: Fetch Secrets
       env:
         INFISICAL_TOKEN: ${{ secrets.INFISICAL_TOKEN }}
       run: |
-        # --raw ensures no quotes like "password" are added
-        infisical export --env=dev --format=dotenv --raw > .env
-        
-        # This securely maps every line in .env to the GitHub Action Environment
+        infisical export --env=dev --format=dotenv > .env
+        sed -i 's/"//g' .env
         cat .env >> $GITHUB_ENV
 
-    # 4. Login to Docker Hub
     - name: Docker Login
       run: |
-        # Using --password-stdin is the most secure way to pass the token
         echo "${{ env.DOCKER_PASSWORD }}" | docker login -u "${{ env.DOCKER_USERNAME }}" --password-stdin
 
-    # 5. Build & Push Docker Image
     - name: Build and Push
       run: |
-        # We use the variable fetched from Infisical
         docker build -t ${{ env.DOCKER_USERNAME }}/war-room-backend ./server
         docker push ${{ env.DOCKER_USERNAME }}/war-room-backend
 
-    # 6. Deploy to EC2
-    - name: SSH Deploy
+    - name: Deploy to EC2
       uses: appleboy/ssh-action@v0.1.6
       with:
         host: ${{ env.EC2_HOST }}
         username: ${{ env.EC2_USER }}
         key: ${{ env.EC2_SSH_KEY }}
         script: |
-          # Log in on EC2 so it has permission to pull the image
           echo "${{ env.DOCKER_PASSWORD }}" | docker login -u "${{ env.DOCKER_USERNAME }}" --password-stdin
-          
           docker pull ${{ env.DOCKER_USERNAME }}/war-room-backend
           docker stop warroom || true
           docker rm warroom || true
-          
-          # We assume the .env already exists on the EC2 in the correct folder
           docker run -d -p 4000:4000 --env-file .env --name warroom ${{ env.DOCKER_USERNAME }}/war-room-backend
